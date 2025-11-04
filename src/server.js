@@ -11,7 +11,21 @@ import orderRoutes from "./routes/order.routes.js";
 dotenv.config();
 const app = express();
 
-app.use(cors());
+const allowedOrigins = [
+  "http://localhost:5173",
+  "https://digital-voucher-e-commerce-fro-git-cb9b05-sourabhrr33s-projects.vercel.app"
+];
+
+app.use(cors({
+  origin: function (origin, callback) {
+    // allow requests with no origin (like Postman or Render ping)
+    if (!origin) return callback(null, true);
+    if (allowedOrigins.includes(origin)) return callback(null, true);
+    return callback(new Error("Not allowed by CORS"));
+  },
+  credentials: true,
+}));
+
 app.use(express.json());
 
 // Connect to DB
