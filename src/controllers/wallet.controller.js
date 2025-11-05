@@ -20,13 +20,20 @@ export const getWalletInfo = async (req, res) => {
 export const topUpWallet = async (req, res) => {
   try {
     const { amount } = req.body;
-    if (!amount || amount <= 0) {
+    if (!amount || amount <= 0)
       return res.status(400).json({ message: "Invalid amount" });
-    }
 
-    const user = req.user;
-    user.walletBalance += amount;
-    await user.save();
+    // Always fetch latest clean user data
+    const user = await User.findById(req.user._id);
+
+    // ✅ Never add to negative balance — reset to 0 if needed
+    const baseBalance = user.walletBalance < 0 ? 0 : user.walletBalance;
+    const newBalance = baseBalance + amount;
+
+    await User.updateOne(
+      { _id: user._id },
+      { $set: { walletBalance: newBalance } }
+    );
 
     await Transaction.create({
       userId: user._id,
@@ -35,8 +42,17 @@ export const topUpWallet = async (req, res) => {
       description: `Wallet top-up of ₹${amount}`,
     });
 
-    res.json({ message: "Wallet topped up successfully", balance: user.walletBalance });
+    const updatedUser = await User.findById(user._id);
+
+    res.json({
+      message: "Wallet topped up successfully",
+      balance: updatedUser.walletBalance,
+    });
   } catch (err) {
+    console.error("topUpWallet error:", err);
     res.status(500).json({ error: err.message });
   }
 };
+
+
+

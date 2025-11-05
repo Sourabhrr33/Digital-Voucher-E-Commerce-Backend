@@ -6,10 +6,10 @@ import { generateVoucherCode } from "../utils/generateVoucherCode.js";
 
 export const placeOrder = async (req, res) => {
   try {
-    const user = req.user;
-    const { items } = req.body; // Array of { voucherId, quantity }
+    const user = await User.findById(req.user._id);
+    const { items } = req.body;
 
-    if (!items || !Array.isArray(items) || items.length === 0) {
+    if (!items?.length) {
       return res.status(400).json({ message: "No items provided" });
     }
 
@@ -34,6 +34,10 @@ export const placeOrder = async (req, res) => {
       ) {
         const code = generateVoucherCode();
         user.walletBalance -= totalPrice;
+
+        // ✅ Clamp balance immediately (important)
+        if (user.walletBalance < 0) user.walletBalance = 0;
+
         voucher.stock -= item.quantity || 1;
         await voucher.save();
 
@@ -45,15 +49,15 @@ export const placeOrder = async (req, res) => {
           status: "SUCCESS",
         });
 
-        successCount++;
         totalDeducted += totalPrice;
+        successCount++;
 
         // Record purchase transaction
         await Transaction.create({
           userId: user._id,
           type: "PURCHASE",
           amount: totalPrice,
-          description: `Purchased ${voucher.name} x${item.quantity || 1}`,
+          description: `Purchased ${voucher.name}`,
         });
       } else {
         orderItems.push({
@@ -66,15 +70,22 @@ export const placeOrder = async (req, res) => {
       }
     }
 
-    // Save updated balance
-    await user.save();
+    // ✅ Enforce DB update with correct clamped value
+    await User.updateOne(
+      { _id: user._id },
+      { $set: { walletBalance: Math.max(user.walletBalance, 0) } }
+    );
 
-    // Determine order status
-    let orderStatus = "FAILED";
-    if (successCount === items.length) orderStatus = "SUCCESS";
-    else if (successCount > 0) orderStatus = "PARTIAL";
+    // Fetch the fresh user from DB (ensures correct data returned)
+    const updatedUser = await User.findById(user._id);
 
-    // Create Order
+    const orderStatus =
+      successCount === 0
+        ? "FAILED"
+        : successCount === items.length
+        ? "SUCCESS"
+        : "PARTIAL";
+
     const order = await Order.create({
       userId: user._id,
       items: orderItems,
@@ -82,37 +93,17 @@ export const placeOrder = async (req, res) => {
       status: orderStatus,
     });
 
-
-// Handle refund only for partial success (not total failure)
-if (orderStatus === "PARTIAL" && totalDeducted > 0) {
-  const refundAmount = orderItems
-    .filter((o) => o.status === "FAILED")
-    .reduce((sum, item) => sum + item.price * (item.quantity || 1), 0);
-
-  // 🧩 Cap refund so we never exceed what was actually deducted
-  const refundable = Math.min(refundAmount, totalDeducted);
-
-  if (refundable > 0) {
-    user.walletBalance += refundable;
-    await user.save();
-
-    await Transaction.create({
-      userId: user._id,
-      type: "REFUND",
-      amount: refundable,
-      description: "Refund for failed items in order",
+    res.json({
+      message: "Order placed",
+      order,
+      walletBalance: updatedUser.walletBalance, // ✅ fresh from DB
     });
-  }
-}
-
-
-
-    res.json({ message: "Order placed", order });
   } catch (err) {
-    console.error(err);
+    console.error("❌ placeOrder error:", err);
     res.status(500).json({ error: err.message });
   }
 };
+
 
 // Get all orders for user
 export const getUserOrders = async (req, res) => {
